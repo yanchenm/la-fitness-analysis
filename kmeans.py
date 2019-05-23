@@ -190,7 +190,7 @@ def top_words_kmeans(num_clusters, num_words):
 
 
 # %% [markdown]
-# ## Final Result
+# ## Results
 # Investigate how the clusters differ using the
 # top_words_kmeans(num_clusters, num_words) function. Modify the
 # num_clusters argument to change how many clusters the k-means
