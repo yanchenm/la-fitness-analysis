@@ -1,4 +1,5 @@
 # %% [markdown]
+# # Basic k-means clustering analysis of LA Fitness Reviews
 # ## Import necessary libraries
 
 # %%
@@ -19,9 +20,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.decomposition import LatentDirichletAllocation
 
+# Set to False to re-scrape data or re-build models
 use_saved_data = True
 use_saved_kmeans = True
-use_save_lda = True
 
 
 # %% [markdown]
@@ -184,24 +185,19 @@ def top_words_kmeans(num_clusters, num_words):
         top_words = ', '.join(top_words.tolist())
 
         print('Top words for cluster {} (average rating {:.3f}): '.format(
-            i, cluster_rating.iloc[i]['rating']) + top_words)
+            i, cluster_rating.iloc[i]['rating']))
+        print(top_words)
 
+
+# %% [markdown]
+# ## Final Result
+# Investigate how the clusters differ using the
+# top_words_kmeans(num_clusters, num_words) function. Modify the
+# num_clusters argument to change how many clusters the k-means
+# model will use.
+#
+# Output is a look at the top n words in each cluster as well
+# as the average rating for reviews in each cluster.
 
 # %%
 top_words_kmeans(30, 10)
-
-# %% [markdown]
-# ## Latent Dirichlet Allocation Analysis
-
-# ### Generate bag of words
-
-# %%
-tf_vectorizer = CountVectorizer(stop_words='english', max_df=0.5)
-tf = tf_vectorizer.fit_transform(reviews_text)
-
-print(tf.shape)
-
-# %% [markdown]
-# ### Run LDA
-
-# %%
