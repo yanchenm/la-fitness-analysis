@@ -5,12 +5,23 @@
 import re
 import os
 import requests
+import pickle
 
 from bs4 import BeautifulSoup
 from datetime import datetime
+from PIL import Image
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.decomposition import LatentDirichletAllocation
+
+use_saved_data = True
+use_saved_kmeans = True
+use_save_lda = True
 
 
 # %% [markdown]
@@ -18,65 +29,179 @@ import pandas as pd
 
 
 # %%
-base_url = 'https://www.consumeraffairs.com/health_clubs/la_fitness.html'
+if use_saved_data and os.path.isfile('./data/review.csv'):
+    reviews = pd.read_csv('./data/review.csv')
+    print('Reviews loaded from file.')
 
-reviews = pd.DataFrame(columns=['id', 'date', 'rating', 'review'])
+else:
+    base_url = 'https://www.consumeraffairs.com/health_clubs/la_fitness.html'
 
-if not os.path.isdir('./data'):
-    os.mkdir('./data')
+    reviews = pd.DataFrame(columns=['id', 'date', 'rating', 'review'])
 
-# Scrape all 1627 reviews from 55 pages
-for i in range(1, 56):
-    print('Scraping page {}...'.format(i))
+    if not os.path.isdir('./data'):
+        os.mkdir('./data')
 
-    page = requests.get('{}?page={}'.format(base_url, i))
-    soup = BeautifulSoup(page.content, 'html.parser')
+    # Scrape all 1627 reviews from 55 pages
+    for i in range(1, 56):
+        print('Scraping page {}...'.format(i))
 
-    reviews_list = soup.find_all('div', {'class': 'rvw'})
+        page = requests.get('{}?page={}'.format(base_url, i))
+        soup = BeautifulSoup(page.content, 'html.parser')
 
-    for outer in reviews_list:
-        review = {}
-        review['id'] = int(outer['data-id'])
+        reviews_list = soup.find_all('div', {'class': 'rvw'})
 
-        # print(review['id'])
+        for outer in reviews_list:
+            review = {}
+            review['id'] = int(outer['data-id'])
 
-        body = outer.find('div', {'class': 'rvw-bd'})
-        meta = outer.find_all('meta')
+            # print(review['id'])
 
-        try:
-            [review['rating']] = [item['content']
-                                  for item in meta if item['itemprop'] == 'ratingValue']
-        except(ValueError):
-            review['rating'] = None
+            body = outer.find('div', {'class': 'rvw-bd'})
+            meta = outer.find_all('meta')
 
-        pattern = r'Original review: (.*)'
-        date_string = body.find('span', recursive=False).text
-        date_match = re.match(pattern, date_string).group(1)
+            try:
+                [review['rating']] = [item['content']
+                                      for item in meta if item['itemprop'] == 'ratingValue']
+            except(ValueError):
+                review['rating'] = None
 
-        # Map non-standard month abbreviations to avoid casting errors
-        month_map = {'Jan.': 'January', 'Feb.': 'February', 'March': 'March',
-                     'April': 'April', 'May': 'May', 'June': 'June', 'July': 'July',
-                     'Aug.': 'August', 'Sept.': 'September', 'Oct.': 'October',
-                     'Nov.': 'November', 'Dec.': 'December'}
+            pattern = r'Original review: (.*)'
+            date_string = body.find('span', recursive=False).text
+            date_match = re.match(pattern, date_string).group(1)
 
-        month = month_map[re.match(r'([A-Za-z]+[.]?)', date_match).group(1)]
-        date_match = re.sub(r'([A-Za-z]+)[.]?', month, date_match)
+            # Map non-standard month abbreviations to avoid casting errors
+            month_map = {'Jan.': 'January', 'Feb.': 'February', 'March': 'March',
+                         'April': 'April', 'May': 'May', 'June': 'June', 'July': 'July',
+                         'Aug.': 'August', 'Sept.': 'September', 'Oct.': 'October',
+                         'Nov.': 'November', 'Dec.': 'December'}
 
-        review['date'] = datetime.strptime(date_match, '%B %d, %Y')
+            month = month_map[re.match(
+                r'([A-Za-z]+[.]?)', date_match).group(1)]
+            date_match = re.sub(r'([A-Za-z]+)[.]?', month, date_match)
 
-        review_text = body.find('p').getText()
+            review['date'] = datetime.strptime(date_match, '%B %d, %Y')
 
-        # If review has collapsed text, append to string
-        if body.find('div', {'class': 'js-collapsed'}) is not None:
-            expanded_text = body.find(
-                'div', {'class': 'js-collapsed'}).getText()
-            review_text += ' ' + expanded_text
+            review_text = body.find('p').getText()
 
-        # Strip newlines and excess whitespace
-        review_text = review_text.replace('\n', '').replace('\r', '')
-        review_text = re.sub(r' +', ' ', review_text)
+            # If review has collapsed text, append to string
+            if body.find('div', {'class': 'js-collapsed'}) is not None:
+                expanded_text = body.find(
+                    'div', {'class': 'js-collapsed'}).getText()
+                review_text += ' ' + expanded_text
 
-        review['review'] = review_text
-        reviews = reviews.append(review, ignore_index=True)
+            # Strip newlines and excess whitespace
+            review_text = review_text.replace('\n', '').replace('\r', '')
+            review_text = re.sub(r' +', ' ', review_text)
 
-reviews.to_csv('./data/review.csv')
+            review['review'] = review_text
+            reviews = reviews.append(review, ignore_index=True)
+
+    reviews.to_csv('./data/review.csv')
+
+# %% [markdown]
+# ## Encode reviews to TF-IDF
+
+# %%
+reviews_text = np.array(reviews['review'])
+
+vectorizer = TfidfVectorizer(stop_words='english', max_df=0.5)
+tfidf = vectorizer.fit_transform(reviews_text)
+tfidf_vocab = vectorizer.get_feature_names()
+
+print(tfidf.shape)
+
+# %% [markdown]
+# ## Baseline k-means cluster analysis
+
+# %% [markdown]
+# ### Find ideal number of clusters
+
+# %%
+if use_saved_kmeans and os.path.isfile('./models/kmeans'):
+    with open('./models/kmeans', 'rb') as f:
+        kmeans = pickle.load(f)
+        print('Loaded kmeans from file.')
+
+else:
+    kmeans = []
+
+    for i in range(2, 31):
+        kmeans.append(KMeans(n_clusters=i, init='k-means++',
+                             random_state=0, n_jobs=-1).fit(tfidf))
+
+        print('Finished k-means for {} clusters.'.format(i))
+
+    with open('./models/kmeans', 'wb') as f:
+        pickle.dump(kmeans, f)
+        print('Saved kmeans to file.')
+
+# %% [markdown]
+# ### Plot scores vs. number of clusters
+
+# %%
+scores = []
+
+for run in kmeans:
+    scores.append(run.inertia_)
+
+fig = plt.figure()
+ax = plt.axes()
+
+ax.plot(list(range(2, 31)), scores)
+
+# %% [markdown]
+# There doesn't appear to be an obvious elbow in the score plot. We will
+# consider a few different cluster options.
+
+# ### Analyse word frequencies and average ratings for different numbers of clusters
+
+
+# %%
+def top_words_kmeans(num_clusters, num_words):
+    if num_clusters > 30 or num_clusters < 2:
+        return
+
+    model = kmeans[num_clusters-2]
+    cluster_assigments = model.labels_
+
+    ratings = reviews['rating']
+
+    df = pd.DataFrame(data=tfidf.toarray(), columns=tfidf_vocab)
+    df['cluster'] = cluster_assigments
+    df['rating'] = ratings
+
+    cluster_rating = df.loc[:, ['rating', 'cluster']
+                            ].groupby('cluster').mean().reset_index()
+
+    df = df.drop(columns='rating')
+
+    frequencies_by_cluster = df.groupby('cluster').sum()
+
+    for i in range(num_clusters):
+        top_words = frequencies_by_cluster.iloc[i].sort_values(
+            ascending=False).reset_index().head(n=num_words)['index'].values
+
+        top_words = ', '.join(top_words.tolist())
+
+        print('Top words for cluster {} (average rating {:.3f}): '.format(
+            i, cluster_rating.iloc[i]['rating']) + top_words)
+
+
+# %%
+top_words_kmeans(30, 10)
+
+# %% [markdown]
+# ## Latent Dirichlet Allocation Analysis
+
+# ### Generate bag of words
+
+# %%
+tf_vectorizer = CountVectorizer(stop_words='english', max_df=0.5)
+tf = tf_vectorizer.fit_transform(reviews_text)
+
+print(tf.shape)
+
+# %% [markdown]
+# ### Run LDA
+
+# %%
