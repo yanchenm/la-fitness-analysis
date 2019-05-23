@@ -7,18 +7,19 @@ import re
 import os
 import requests
 import pickle
+import time
 
 from bs4 import BeautifulSoup
 from datetime import datetime
-from PIL import Image
+
+import spacy
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from sklearn.cluster import KMeans, MiniBatchKMeans
-from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
 
 # Set to False to re-scrape data or re-build models
 use_saved_data = True
@@ -125,8 +126,9 @@ if use_saved_kmeans and os.path.isfile('./models/kmeans'):
 
 else:
     kmeans = []
+    start = time.time()
 
-    for i in range(2, 31):
+    for i in range(2, 51):
         kmeans.append(KMeans(n_clusters=i, init='k-means++',
                              random_state=0, n_jobs=-1).fit(tfidf))
 
@@ -135,6 +137,9 @@ else:
     with open('./models/kmeans', 'wb') as f:
         pickle.dump(kmeans, f)
         print('Saved kmeans to file.')
+
+    end = time.time()
+    print('Time elapsed: {:.3f}'.format(end - start))
 
 # %% [markdown]
 # ### Plot scores vs. number of clusters
@@ -148,7 +153,7 @@ for run in kmeans:
 fig = plt.figure()
 ax = plt.axes()
 
-ax.plot(list(range(2, 31)), scores)
+ax.plot(list(range(2, 51)), scores)
 
 # %% [markdown]
 # There doesn't appear to be an obvious elbow in the score plot. We will
@@ -158,8 +163,8 @@ ax.plot(list(range(2, 31)), scores)
 
 
 # %%
-def top_words_kmeans(num_clusters, num_words):
-    if num_clusters > 30 or num_clusters < 2:
+def top_words_kmeans(num_clusters, num_words, kmeans=kmeans, tfidf=tfidf, tfidf_vocab=tfidf_vocab):
+    if num_clusters > 50 or num_clusters < 2:
         return
 
     model = kmeans[num_clusters-2]
@@ -201,3 +206,89 @@ def top_words_kmeans(num_clusters, num_words):
 
 # %%
 top_words_kmeans(30, 10)
+
+# %% [markdown]
+# ## Applying more advanced text processing
+#
+# ### Lemmatize all text
+
+# %%
+nlp = spacy.load('en', disable=['parser', 'ner'])
+
+
+def lemmatize(sentence):
+    doc = nlp(sentence)
+    return ' '.join([token.lemma_ for token in doc])
+
+
+reviews_text = np.array(reviews['review'])
+reviews_lem = np.array([lemmatize(r) for r in reviews_text])
+
+# %% [markdown]
+# ### Custom stopwords
+
+# %%
+stop_words = list(spacy.lang.en.stop_words.STOP_WORDS)
+stop_words.extend(['la', 'fitness', 'pron', '-pron-'])
+
+# %% [markdown]
+# ### Include bi- and tri-grams in tf-idf
+
+# %%
+advanced_vectorizer = TfidfVectorizer(
+    stop_words=stop_words, ngram_range=(1, 3), max_df=0.5)
+
+new_tfidf = advanced_vectorizer.fit_transform(reviews_lem)
+new_tfidf_vocab = advanced_vectorizer.get_feature_names()
+
+# %% [markdown]
+# ### Rebuild kmeans models
+
+# %%
+if use_saved_kmeans and os.path.isfile('./models/kmeans_processed'):
+    with open('./models/kmeans_processed', 'rb') as f:
+        kmeans_processed = pickle.load(f)
+        print('Loaded kmeans_processed from file.')
+
+else:
+    kmeans_processed = []
+    start = time.time()
+
+    for i in range(2, 51):
+        kmeans_processed.append(KMeans(n_clusters=i, init='k-means++',
+                                       random_state=0, n_jobs=-1).fit(new_tfidf))
+
+        print('Finished k-means for {} clusters.'.format(i))
+
+    with open('./models/kmeans_processed', 'wb') as f:
+        pickle.dump(kmeans_processed, f)
+        print('Saved kmeans_processed to file.')
+
+    end = time.time()
+    print('Time elapsed: {:.3f}'.format(end - start))
+
+# %% [markdown]
+# ## New results
+
+# %%
+scores = []
+
+for run in kmeans_processed:
+    scores.append(run.inertia_)
+
+fig = plt.figure()
+ax = plt.axes()
+
+ax.plot(list(range(2, 51)), scores)
+
+# %% [markdown]
+# ## Top words at 10 clusters
+
+# %%
+top_words_kmeans(10, 10, kmeans_processed, new_tfidf, new_tfidf_vocab)
+
+# %% [markdown]
+# ## Top words at 30 clusters
+
+# %%
+top_words_kmeans(30, 10, kmeans_processed, new_tfidf, new_tfidf_vocab)

@@ -1,4 +1,5 @@
 __pycache__/
 .vscode/
 .ipynb_checkpoints
-.models/mallet-2.0.8/
+models/mallet-2.0.8/
+models/kmeans_processed
